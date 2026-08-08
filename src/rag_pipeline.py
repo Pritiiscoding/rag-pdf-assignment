@@ -41,26 +41,69 @@ class RAGPipeline:
         )
 
     def ingest(self) -> int:
-        """Parse all PDFs in settings.pdf_dir, embed them, and load into Qdrant.
+    """Parse PDFs and index embeddings in small batches."""
 
-        Returns the number of chunks indexed.
-        """
-        chunks = load_pdfs(
-            pdf_dir=self.settings.pdf_dir,
-            chunk_size=self.settings.chunk_size,
-            chunk_overlap=self.settings.chunk_overlap,
+    chunks = load_pdfs(
+        pdf_dir=self.settings.pdf_dir,
+        chunk_size=self.settings.chunk_size,
+        chunk_overlap=self.settings.chunk_overlap,
+    )
+
+    total_chunks = len(chunks)
+
+    if total_chunks == 0:
+        print("[INFO] No PDF chunks found.")
+        return 0
+
+    print(f"[INFO] Total chunks to embed: {total_chunks}")
+
+    # Create/reset Qdrant collection first
+    self.store.recreate_collection()
+
+    batch_size = 8
+    indexed = 0
+
+    for start in range(0, total_chunks, batch_size):
+        batch_chunks = chunks[start:start + batch_size]
+
+        texts = [chunk.text for chunk in batch_chunks]
+
+        print(
+            f"[INFO] Processing chunks "
+            f"{start + 1}-{min(start + batch_size, total_chunks)} "
+            f"of {total_chunks}"
         )
-        print(f"[INFO] Total chunks to embed: {len(chunks)}")
 
-        texts = [c.text for c in chunks]
-        vectors = self.embedder.embed(texts)
+        # Generate only a small number of embeddings at once
+        vectors = self.embedder.embed(
+            texts,
+            batch_size=batch_size
+        )
 
-        self.store.recreate_collection()
-        self.store.upsert_chunks(chunks, vectors)
+        # Immediately upload this batch
+        self.store.upsert_chunks(
+            batch_chunks,
+            vectors
+        )
 
-        print(f"[INFO] Indexed {len(chunks)} chunks into Qdrant collection '{self.settings.qdrant_collection}'")
-        return len(chunks)
+        indexed += len(batch_chunks)
 
+        # Release temporary objects
+        del texts
+        del vectors
+        del batch_chunks
+
+    # Release the complete chunk list
+    del chunks
+
+    print(
+        f"[INFO] Indexed {indexed} chunks into "
+        f"Qdrant collection '{self.settings.qdrant_collection}'"
+    )
+
+    return indexed
+
+    
     def query(self, question: str) -> RAGAnswer:
         if not self.store.collection_exists():
             raise RuntimeError(
