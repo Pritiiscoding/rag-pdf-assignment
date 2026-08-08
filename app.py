@@ -163,10 +163,11 @@ def get_status():
         file_count = len(list(pdf_dir.glob('*.pdf'))) if pdf_dir.exists() else 0
         
         return jsonify({
+            'status': 'ok',
             'uploaded_files': file_count,
+            'qdrant_url': settings.qdrant_url,
             'embedding_model': settings.embedding_model,
-            'llm_model': settings.openrouter_model,
-            'status':'ready'
+            'llm_model': settings.openrouter_model
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
