@@ -5,12 +5,13 @@ component we depend on is the LLM call, which uses a free OpenRouter model.
 """
 from typing import List
 
-from sentence_transformers import SentenceTransformer
-
 
 class EmbeddingModel:
     def __init__(self, model_name: str):
         self.model_name = model_name
+
+        from sentence_transformers import SentenceTransformer
+
         self._model = SentenceTransformer(model_name)
         self.dimension = self._model.get_sentence_embedding_dimension()
 
