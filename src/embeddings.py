@@ -12,13 +12,13 @@ class EmbeddingModel:
 
         from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(model_name)
+        self._model = SentenceTransformer(model_name, device="cpu")
         self.dimension = self._model.get_sentence_embedding_dimension()
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        vectors = self._model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+        vectors = self._model.encode(texts, show_progress_bar=False, normalize_embeddings=True, batch_size=4)
         return vectors.tolist()
 
     def embed_one(self, text: str) -> List[float]:
