@@ -181,16 +181,6 @@ def health_check():
     return jsonify({'status': 'healthy', 'service': 'documind-ai'}), 200
 
 
-@app.route('/health')
-def health_check():
-    """Health check endpoint for cloud platforms."""
-    return jsonify({'status': 'healthy', 'service': 'documind-ai'}), 200
-
-
-# For Gunicorn compatibility
-application = app
-
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('DEBUG', 'False').lower() == 'true'
