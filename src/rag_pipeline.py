@@ -1,4 +1,5 @@
 """Wires together PDF parsing, embeddings, Qdrant, and the LLM into one pipeline."""
+
 from dataclasses import dataclass
 from typing import List
 
@@ -27,13 +28,18 @@ class RAGAnswer:
 class RAGPipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.embedder = EmbeddingModel(settings.embedding_model)
+
+        self.embedder = EmbeddingModel(
+            settings.embedding_model
+        )
+
         self.store = VectorStore(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
             collection_name=settings.qdrant_collection,
             vector_size=self.embedder.dimension,
         )
+
         self.llm = OpenRouterLLM(
             api_key=settings.openrouter_api_key,
             model=settings.openrouter_model,
@@ -41,85 +47,100 @@ class RAGPipeline:
         )
 
     def ingest(self) -> int:
-    """Parse PDFs and index embeddings in small batches."""
+        """Parse PDFs and index embeddings in small batches."""
 
-    chunks = load_pdfs(
-        pdf_dir=self.settings.pdf_dir,
-        chunk_size=self.settings.chunk_size,
-        chunk_overlap=self.settings.chunk_overlap,
-    )
+        chunks = load_pdfs(
+            pdf_dir=self.settings.pdf_dir,
+            chunk_size=self.settings.chunk_size,
+            chunk_overlap=self.settings.chunk_overlap,
+        )
 
-    total_chunks = len(chunks)
+        total_chunks = len(chunks)
 
-    if total_chunks == 0:
-        print("[INFO] No PDF chunks found.")
-        return 0
+        if total_chunks == 0:
+            print("[INFO] No PDF chunks found.")
+            return 0
 
-    print(f"[INFO] Total chunks to embed: {total_chunks}")
+        print(f"[INFO] Total chunks to embed: {total_chunks}")
 
-    # Create/reset Qdrant collection first
-    self.store.recreate_collection()
+        # Create/reset the Qdrant collection
+        self.store.recreate_collection()
 
-    batch_size = 8
-    indexed = 0
+        # Small batches reduce RAM usage on Render
+        batch_size = 8
+        indexed = 0
 
-    for start in range(0, total_chunks, batch_size):
-        batch_chunks = chunks[start:start + batch_size]
+        for start in range(0, total_chunks, batch_size):
+            batch_chunks = chunks[start:start + batch_size]
 
-        texts = [chunk.text for chunk in batch_chunks]
+            texts = [chunk.text for chunk in batch_chunks]
+
+            end = min(start + batch_size, total_chunks)
+
+            print(
+                f"[INFO] Processing chunks "
+                f"{start + 1}-{end} of {total_chunks}"
+            )
+
+            # Generate embeddings only for this small batch
+            vectors = self.embedder.embed(
+                texts,
+                batch_size=batch_size,
+            )
+
+            # Upload this batch to Qdrant
+            self.store.upsert_chunks(
+                batch_chunks,
+                vectors,
+            )
+
+            indexed += len(batch_chunks)
+
+            # Release temporary objects
+            del texts
+            del vectors
+            del batch_chunks
+
+        # Release the full chunk list
+        del chunks
 
         print(
-            f"[INFO] Processing chunks "
-            f"{start + 1}-{min(start + batch_size, total_chunks)} "
-            f"of {total_chunks}"
+            f"[INFO] Indexed {indexed} chunks into "
+            f"Qdrant collection "
+            f"'{self.settings.qdrant_collection}'"
         )
 
-        # Generate only a small number of embeddings at once
-        vectors = self.embedder.embed(
-            texts,
-            batch_size=batch_size
-        )
+        return indexed
 
-        # Immediately upload this batch
-        self.store.upsert_chunks(
-            batch_chunks,
-            vectors
-        )
-
-        indexed += len(batch_chunks)
-
-        # Release temporary objects
-        del texts
-        del vectors
-        del batch_chunks
-
-    # Release the complete chunk list
-    del chunks
-
-    print(
-        f"[INFO] Indexed {indexed} chunks into "
-        f"Qdrant collection '{self.settings.qdrant_collection}'"
-    )
-
-    return indexed
-
-    
     def query(self, question: str) -> RAGAnswer:
+        """Answer a question using the indexed PDF documents."""
+
         if not self.store.collection_exists():
             raise RuntimeError(
-                "Qdrant collection does not exist yet. Run ingestion first (python main.py ingest)."
+                "Qdrant collection does not exist yet. "
+                "Please process a PDF first."
             )
 
         query_vector = self.embedder.embed_one(question)
-        hits = self.store.search(query_vector, top_k=self.settings.top_k)
 
-        answer_text = self.llm.generate_answer(question, hits)
+        hits = self.store.search(
+            query_vector,
+            top_k=self.settings.top_k,
+        )
+
+        answer_text = self.llm.generate_answer(
+            question,
+            hits,
+        )
+
         found = NOT_FOUND_PHRASE not in answer_text
 
         citations = []
+
         if found:
             for hit in hits:
                 payload = hit.payload
+
                 citations.append(
                     Citation(
                         doc_name=payload["doc_name"],
@@ -129,4 +150,8 @@ class RAGPipeline:
                     )
                 )
 
-        return RAGAnswer(answer=answer_text, citations=citations, found=found)
+        return RAGAnswer(
+            answer=answer_text,
+            citations=citations,
+            found=found,
+        )
