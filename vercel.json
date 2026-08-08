@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
+  ],
+  "env": {
+    "OPENROUTER_API_KEY": "@openrouter_api_key",
+    "QDRANT_URL": "@qdrant_url",
+    "QDRANT_API_KEY": "@qdrant_api_key",
+    "QDRANT_COLLECTION": "pdf_docs",
+    "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
+    "CHUNK_SIZE": "800",
+    "CHUNK_OVERLAP": "150",
+    "TOP_K": "5",
+    "PDF_DIR": "data/pdfs"
+  }
+}

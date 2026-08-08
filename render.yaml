@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: documind-ai
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 4 --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PORT
+        value: 5000
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        value: https://your-qdrant-cloud-url.qdrant.io
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: QDRANT_COLLECTION
+        value: pdf_docs
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: CHUNK_SIZE
+        value: 800
+      - key: CHUNK_OVERLAP
+        value: 150
+      - key: TOP_K
+        value: 5
+      - key: PDF_DIR
+        value: data/pdfs
+      - key: DEBUG
+        value: false
