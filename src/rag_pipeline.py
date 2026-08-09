@@ -1,4 +1,5 @@
 """Wires together PDF parsing, embeddings, Qdrant, and the LLM into one pipeline."""
+import concurrent.futures
 from dataclasses import dataclass
 from typing import List
 
@@ -27,7 +28,11 @@ class RAGAnswer:
 class RAGPipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.embedder = EmbeddingModel(settings.embedding_model)
+        self.embedder = EmbeddingModel(
+            model_name=settings.embedding_model,
+            use_api=settings.use_api_embeddings,
+            api_key=settings.openai_api_key if settings.use_api_embeddings else None
+        )
         self.store = VectorStore(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
@@ -45,6 +50,16 @@ class RAGPipeline:
 
         Returns the number of chunks indexed.
         """
+        try:
+            # Use ThreadPoolExecutor for timeout handling
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._ingest_internal)
+                return future.result(timeout=300)  # 5 minute timeout
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError("Document ingestion timed out after 5 minutes")
+    
+    def _ingest_internal(self) -> int:
+        """Internal ingestion method without timeout wrapper."""
         chunks = load_pdfs(
             pdf_dir=self.settings.pdf_dir,
             chunk_size=self.settings.chunk_size,

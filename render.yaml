@@ -3,7 +3,7 @@ services:
     name: documind-ai
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 4 --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --workers 1 --threads 4 --bind 0.0.0.0:$PORT --timeout 300
     envVars:
       - key: PORT
         value: 5000
@@ -17,6 +17,10 @@ services:
         value: pdf_docs
       - key: EMBEDDING_MODEL
         value: sentence-transformers/all-MiniLM-L6-v2
+      - key: USE_API_EMBEDDINGS
+        value: true
+      - key: OPENAI_API_KEY
+        sync: false
       - key: CHUNK_SIZE
         value: 800
       - key: CHUNK_OVERLAP
@@ -27,3 +31,7 @@ services:
         value: data/pdfs
       - key: DEBUG
         value: false
+      - key: AUTO_CLEANUP_FILES
+        value: true
+      - key: MAX_FILE_AGE_HOURS
+        value: 24

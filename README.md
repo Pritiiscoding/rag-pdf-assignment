@@ -10,9 +10,11 @@ A modern, AI-powered web application for analyzing PDF documents through natural
 ## ✨ Features
  
 - 📤 **Easy PDF Upload** - Drag & drop or click to upload documents
-- 🔄 **One-Click Processing** - Automatically ingest documents into the RAG pipeline
+- 🔄 **Background Processing** - Async document ingestion without blocking
+- 📊 **Progress Tracking** - Real-time status updates for long operations
 - 💬 **Natural Language Q&A** - Ask questions in plain English
 - 📚 **Accurate Citations** - Every answer includes document sources and page numbers
+- 💾 **Storage Optimized** - API embeddings and automatic cleanup for cloud deployment
 - 🎨 **Modern UI** - Beautiful, responsive interface with smooth animations
 - 🚀 **Production Ready** - Deploy to Render or Vercel with one click
 - 🔒 **Secure** - Environment variable configuration for sensitive data
@@ -29,7 +31,7 @@ User Question → Embedding → Similarity Search → LLM Generation → Answer 
  
 - **Backend**: Flask (Python)
 - **AI/ML**: 
-  - Sentence Transformers (local embeddings)
+  - Sentence Transformers (local embeddings) or OpenAI API (cloud-optimized)
   - OpenRouter (LLM API)
   - Qdrant (vector database)
 - **Frontend**: HTML5, CSS3, JavaScript (no frameworks)
@@ -75,22 +77,60 @@ Navigate to `http://localhost:5000`
 ### Deploy to Render
 1. Push code to GitHub
 2. Import repository in Render
-3. Configure environment variables
+3. Configure environment variables:
+   - `OPENROUTER_API_KEY` - Your OpenRouter API key
+   - `QDRANT_URL` - Your Qdrant Cloud URL
+   - `QDRANT_API_KEY` - Your Qdrant Cloud API key
+   - `USE_API_EMBEDDINGS=true` - Recommended for cloud deployment
+   - `OPENAI_API_KEY` - Required if using API embeddings
 4. Deploy automatically
+
+**Note**: The `render.yaml` is pre-configured for optimal cloud deployment with API embeddings enabled and automatic file cleanup.
  
 ### Deploy to Vercel
 1. Push code to GitHub
 2. Import repository in Vercel
-3. Configure environment variables
+3. Configure environment variables:
+   - `OPENROUTER_API_KEY` - Your OpenRouter API key
+   - `QDRANT_URL` - Your Qdrant Cloud URL
+   - `QDRANT_API_KEY` - Your Qdrant Cloud API key
+   - `USE_API_EMBEDDINGS=true` - Recommended for cloud deployment
+   - `OPENAI_API_KEY` - Required if using API embeddings
 4. Deploy automatically
  
 📖 **See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment guide**
  
 ## 🔑 Required Environment Variables
  
+### Core Requirements
 - `OPENROUTER_API_KEY` - Get from [OpenRouter](https://openrouter.ai/)
 - `QDRANT_URL` - Your Qdrant Cloud URL
 - `QDRANT_API_KEY` - Your Qdrant Cloud API key
+
+### Optional (Recommended for Cloud)
+- `USE_API_EMBEDDINGS=true` - Use OpenAI embeddings (saves ~120MB storage)
+- `OPENAI_API_KEY` - Required if using API embeddings (get from OpenAI)
+
+## 💾 Storage Optimization for Cloud Deployment
+
+The application includes built-in storage optimization for cloud platforms like Render:
+
+### API-Based Embeddings
+- Set `USE_API_EMBEDDINGS=true` to use OpenAI embeddings instead of local models
+- This saves ~120MB+ of storage by avoiding large model downloads
+- Requires `OPENAI_API_KEY` when enabled
+
+### Automatic File Cleanup
+- `AUTO_CLEANUP_FILES=true` - Automatically removes old PDF files
+- `MAX_FILE_AGE_HOURS=24` - Files older than 24 hours are automatically deleted
+- Prevents storage accumulation on cloud platforms
+
+### Cloud Deployment Configuration
+The `render.yaml` is pre-configured with:
+- API embeddings enabled by default
+- 5-minute timeout for long-running operations
+- Automatic file cleanup enabled
+- Optimized worker configuration
  
 ## 📖 Usage
  
@@ -100,6 +140,8 @@ Navigate to `http://localhost:5000`
  
 2. **Process Documents**
    - Click "Process Documents" button
+   - Documents are processed in the background (async)
+   - Monitor progress via status updates
    - Documents are chunked, embedded, and stored in vector database
  
 3. **Ask Questions**
@@ -135,6 +177,12 @@ Navigate to `http://localhost:5000`
 - `CHUNK_OVERLAP`: Chunk overlap (default: 150)
 - `TOP_K`: Number of results to retrieve (default: 5)
 - `EMBEDDING_MODEL`: Embedding model (default: sentence-transformers/all-MiniLM-L6-v2)
+- `USE_API_EMBEDDINGS`: Use OpenAI API embeddings instead of local models (default: false)
+- `OPENAI_API_KEY`: OpenAI API key (required if USE_API_EMBEDDINGS=true)
+
+### Storage Management
+- `AUTO_CLEANUP_FILES`: Automatically remove old PDF files (default: true)
+- `MAX_FILE_AGE_HOURS`: Maximum age of files before cleanup in hours (default: 24)
  
 ### LLM Settings
 - `OPENROUTER_MODEL`: LLM model (default: meta-llama/llama-3.1-8b-instruct:free)
@@ -146,7 +194,8 @@ Navigate to `http://localhost:5000`
 - `POST /api/upload` - Upload PDF files
 - `GET /api/files` - List uploaded files
 - `DELETE /api/files/<filename>` - Delete a file
-- `POST /api/ingest` - Process documents
+- `POST /api/ingest` - Process documents (async, returns 202)
+- `GET /api/ingest/status` - Check processing status and progress
 - `POST /api/query` - Ask questions
 - `GET /api/status` - System status
 - `GET /health` - Health check
@@ -182,19 +231,31 @@ curl -X POST -H "Content-Type: application/json" \
 - Verify API key is valid
 - Check model availability
 - Monitor API usage limits
+
+**Storage limits on cloud platforms**
+- Enable `USE_API_EMBEDDINGS=true` to avoid large model downloads
+- Ensure `AUTO_CLEANUP_FILES=true` is enabled
+- Check `MAX_FILE_AGE_HOURS` setting for file retention
+
+**Preprocessing timeout**
+- Processing now runs in background - check `/api/ingest/status` for progress
+- Large PDFs may take longer to process
+- Monitor logs for specific error messages
  
 ## 📈 Performance
  
 ### Optimization Tips
-- Use smaller embedding models for faster processing
-- Limit chunk size for quicker ingestion
+- Enable `USE_API_EMBEDDINGS=true` for cloud deployment to save storage
+- Use smaller chunk size for quicker ingestion on large documents
 - Use free OpenRouter models to reduce costs
-- Implement caching for frequent queries
+- Monitor `/api/ingest/status` for processing progress
+- Adjust `MAX_FILE_AGE_HOURS` for storage management
  
 ### Benchmarks
-- **Document Ingestion**: ~1-2 seconds per page
+- **Document Ingestion**: ~1-2 seconds per page (runs in background)
 - **Query Response**: ~2-5 seconds per question
 - **File Upload**: <1 second per MB
+- **Storage Usage**: ~50MB with API embeddings (vs ~170MB with local models)
  
 ## 🔒 Security
  
@@ -246,5 +307,3 @@ This project is licensed under the MIT License.
 Made by priti
  
 **Transform document analysis with AI** 🚀
-
-Command dir in …/rag-pdf-

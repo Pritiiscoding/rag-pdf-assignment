@@ -1,6 +1,9 @@
 """Flask web application for PDF RAG with file upload and Q&A interface."""
 import os
+import time
+import threading
 from pathlib import Path
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -23,6 +26,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Initialize RAG pipeline
 rag_pipeline = None
 
+# Processing state
+processing_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'error': None,
+    'start_time': None
+}
+processing_lock = threading.Lock()
+
 
 def allowed_file(filename):
     """Check if file has allowed extension."""
@@ -35,6 +48,44 @@ def get_pipeline():
     if rag_pipeline is None:
         rag_pipeline = RAGPipeline(settings)
     return rag_pipeline
+
+
+def cleanup_old_files():
+    """Remove files older than max_file_age_hours."""
+    if not settings.auto_cleanup_files:
+        return
+    
+    try:
+        pdf_dir = Path(app.config['UPLOAD_FOLDER'])
+        if not pdf_dir.exists():
+            return
+        
+        max_age = timedelta(hours=settings.max_file_age_hours)
+        current_time = datetime.now()
+        
+        for pdf_file in pdf_dir.glob('*.pdf'):
+            file_age = current_time - datetime.fromtimestamp(pdf_file.stat().st_mtime)
+            if file_age > max_age:
+                try:
+                    pdf_file.unlink()
+                    print(f"[CLEANUP] Removed old file: {pdf_file.name}")
+                except Exception as e:
+                    print(f"[CLEANUP] Failed to remove {pdf_file.name}: {e}")
+    except Exception as e:
+        print(f"[CLEANUP] Error during cleanup: {e}")
+
+
+def update_processing_state(status, progress=0, message='', error=None):
+    """Update the global processing state."""
+    with processing_lock:
+        processing_state['status'] = status
+        processing_state['progress'] = progress
+        processing_state['message'] = message
+        processing_state['error'] = error
+        if status == 'processing' and processing_state['start_time'] is None:
+            processing_state['start_time'] = time.time()
+        elif status == 'idle':
+            processing_state['start_time'] = None
 
 
 @app.route('/')
@@ -106,18 +157,57 @@ def delete_file(filename):
 
 @app.route('/api/ingest', methods=['POST'])
 def ingest_documents():
-    """Ingest all PDF files into the RAG pipeline."""
-    try:
-        pipeline = get_pipeline()
-        chunk_count = pipeline.ingest()
-        return jsonify({
-            'message': 'Documents ingested successfully',
-            'chunks_indexed': chunk_count
-        }), 200
-    except FileNotFoundError as e:
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    """Ingest all PDF files into the RAG pipeline (asynchronous)."""
+    with processing_lock:
+        if processing_state['status'] == 'processing':
+            return jsonify({'error': 'Processing already in progress'}), 400
+    
+    def run_ingestion():
+        try:
+            update_processing_state('processing', 0, 'Starting document ingestion...')
+            
+            # Clean up old files first
+            cleanup_old_files()
+            update_processing_state('processing', 10, 'Cleaned up old files')
+            
+            # Initialize pipeline
+            pipeline = get_pipeline()
+            update_processing_state('processing', 20, 'Loading embedding model...')
+            
+            # Perform ingestion
+            chunk_count = pipeline.ingest()
+            update_processing_state('processing', 100, f'Successfully indexed {chunk_count} chunks')
+            
+            # Mark as complete
+            update_processing_state('idle', 100, f'Completed: {chunk_count} chunks indexed')
+            
+        except FileNotFoundError as e:
+            update_processing_state('idle', 0, '', str(e))
+        except Exception as e:
+            update_processing_state('idle', 0, '', str(e))
+    
+    # Start background thread
+    thread = threading.Thread(target=run_ingestion)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({
+        'message': 'Ingestion started in background',
+        'status': 'processing'
+    }), 202
+
+
+@app.route('/api/ingest/status', methods=['GET'])
+def get_ingest_status():
+    """Get the current status of document ingestion."""
+    with processing_lock:
+        state = processing_state.copy()
+    
+    # Calculate elapsed time if processing
+    if state['status'] == 'processing' and state['start_time']:
+        state['elapsed_time'] = time.time() - state['start_time']
+    
+    return jsonify(state), 200
 
 
 @app.route('/api/query', methods=['POST'])
@@ -190,5 +280,9 @@ if __name__ == '__main__':
     print(f"Qdrant URL: {settings.qdrant_url}")
     print(f"Port: {port}")
     print(f"Debug mode: {debug}")
+    print(f"Using API embeddings: {settings.use_api_embeddings}")
+    
+    # Clean up old files on startup
+    cleanup_old_files()
     
     app.run(host='0.0.0.0', port=port, debug=debug)

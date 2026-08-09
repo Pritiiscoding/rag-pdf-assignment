@@ -28,6 +28,8 @@ class Settings:
 
     # Embeddings
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    use_api_embeddings: bool = os.getenv("USE_API_EMBEDDINGS", "false").lower() == "true"
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
 
     # Chunking / retrieval
     chunk_size: int = _get_int("CHUNK_SIZE", 800)
@@ -36,6 +38,10 @@ class Settings:
 
     # Data
     pdf_dir: str = os.getenv("PDF_DIR", "data/pdfs")
+    
+    # Storage cleanup
+    auto_cleanup_files: bool = os.getenv("AUTO_CLEANUP_FILES", "true").lower() == "true"
+    max_file_age_hours: int = _get_int("MAX_FILE_AGE_HOURS", 24)
 
 
 settings = Settings()
