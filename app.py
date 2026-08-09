@@ -162,29 +162,51 @@ def ingest_documents():
         if processing_state['status'] == 'processing':
             return jsonify({'error': 'Processing already in progress'}), 400
     
+    # Check if files exist first
+    pdf_dir = Path(app.config['UPLOAD_FOLDER'])
+    if not pdf_dir.exists():
+        return jsonify({'error': 'Upload directory does not exist'}), 404
+    
+    pdf_files = list(pdf_dir.glob('*.pdf'))
+    if not pdf_files:
+        return jsonify({'error': 'No PDF files found to process'}), 404
+    
     def run_ingestion():
         try:
-            update_processing_state('processing', 0, 'Starting document ingestion...')
+            print("[INGEST] Starting document ingestion...")
+            update_processing_state('processing', 5, f'Found {len(pdf_files)} PDF files to process')
             
             # Clean up old files first
+            print("[INGEST] Cleaning up old files...")
             cleanup_old_files()
             update_processing_state('processing', 10, 'Cleaned up old files')
             
             # Initialize pipeline
+            print("[INGEST] Initializing pipeline...")
+            update_processing_state('processing', 15, 'Initializing RAG pipeline...')
             pipeline = get_pipeline()
-            update_processing_state('processing', 20, 'Loading embedding model...')
+            
+            update_processing_state('processing', 25, 'Loading embedding model...')
+            print(f"[INGEST] Using API embeddings: {settings.use_api_embeddings}")
             
             # Perform ingestion
+            print("[INGEST] Running ingestion...")
+            update_processing_state('processing', 30, 'Processing PDF files...')
             chunk_count = pipeline.ingest()
+            print(f"[INGEST] Completed: {chunk_count} chunks indexed")
             update_processing_state('processing', 100, f'Successfully indexed {chunk_count} chunks')
             
             # Mark as complete
             update_processing_state('idle', 100, f'Completed: {chunk_count} chunks indexed')
             
         except FileNotFoundError as e:
-            update_processing_state('idle', 0, '', str(e))
+            print(f"[INGEST] File not found error: {e}")
+            update_processing_state('idle', 0, '', f'File not found: {str(e)}')
         except Exception as e:
-            update_processing_state('idle', 0, '', str(e))
+            print(f"[INGEST] Error during ingestion: {e}")
+            import traceback
+            traceback.print_exc()
+            update_processing_state('idle', 0, '', f'Processing error: {str(e)}')
     
     # Start background thread
     thread = threading.Thread(target=run_ingestion)
@@ -193,7 +215,8 @@ def ingest_documents():
     
     return jsonify({
         'message': 'Ingestion started in background',
-        'status': 'processing'
+        'status': 'processing',
+        'files_to_process': len(pdf_files)
     }), 202
 
 

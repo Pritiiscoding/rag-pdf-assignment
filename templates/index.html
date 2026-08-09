@@ -854,29 +854,78 @@
         // Ingest Handler
         ingestBtn.addEventListener('click', async () => {
             ingestBtn.disabled = true;
-            ingestBtn.innerHTML = '<span class="loading"></span> Processing...';
+            ingestBtn.innerHTML = '<span class="loading"></span> Starting...';
 
             try {
+                // Start the async processing
                 const response = await fetch(`${API_BASE}/ingest`, {
                     method: 'POST'
                 });
 
-                if (response.ok) {
+                if (response.status === 202) {
+                    // Processing started in background, poll for status
+                    pollProcessingStatus();
+                } else if (response.ok) {
                     const data = await response.json();
                     showMessage('success', `✅ Documents processed! ${data.chunks_indexed} chunks indexed.`);
                     checkStatus();
+                    resetIngestButton();
                 } else {
                     const error = await response.json();
-                    showMessage('error', `❌ Failed to process: ${error.error}`);
+                    showMessage('error', `❌ Failed to start processing: ${error.error}`);
+                    resetIngestButton();
                 }
             } catch (error) {
-                showMessage('error', `❌ Failed to process: ${error.message}`);
-            } finally {
-                ingestBtn.disabled = false;
-                ingestBtn.innerHTML = '🔄 Process Documents';
-                updateIngestButton();
+                showMessage('error', `❌ Failed to start processing: ${error.message}`);
+                resetIngestButton();
             }
         });
+
+        // Poll processing status
+        async function pollProcessingStatus() {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/ingest/status`);
+                    if (response.ok) {
+                        const status = await response.json();
+                        
+                        if (status.status === 'processing') {
+                            const progress = status.progress || 0;
+                            const message = status.message || 'Processing...';
+                            ingestBtn.innerHTML = `<span class="loading"></span> ${progress}% - ${message}`;
+                        } else if (status.status === 'idle') {
+                            clearInterval(pollInterval);
+                            if (status.error) {
+                                showMessage('error', `❌ Processing failed: ${status.error}`);
+                            } else if (status.message) {
+                                showMessage('success', `✅ ${status.message}`);
+                                checkStatus();
+                            }
+                            resetIngestButton();
+                        }
+                    }
+                } catch (error) {
+                    clearInterval(pollInterval);
+                    showMessage('error', `❌ Failed to check status: ${error.message}`);
+                    resetIngestButton();
+                }
+            }, 2000); // Poll every 2 seconds
+
+            // Timeout after 5 minutes
+            setTimeout(() => {
+                clearInterval(pollInterval);
+                if (ingestBtn.disabled) {
+                    showMessage('error', '❌ Processing timeout - please try again');
+                    resetIngestButton();
+                }
+            }, 300000); // 5 minutes
+        }
+
+        function resetIngestButton() {
+            ingestBtn.disabled = false;
+            ingestBtn.innerHTML = '🔄 Process Documents';
+            updateIngestButton();
+        }
 
         // Chat Handlers
         askBtn.addEventListener('click', askQuestion);
