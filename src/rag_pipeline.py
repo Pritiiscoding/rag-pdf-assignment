@@ -1,5 +1,4 @@
 """Wires together PDF parsing, embeddings, Qdrant, and the LLM into one pipeline."""
-import concurrent.futures
 from dataclasses import dataclass
 from typing import List
 
@@ -29,9 +28,7 @@ class RAGPipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.embedder = EmbeddingModel(
-            model_name=settings.embedding_model,
-            use_api=settings.use_api_embeddings,
-            api_key=settings.openai_api_key if settings.use_api_embeddings else None
+            settings.embedding_model
         )
         self.store = VectorStore(
             url=settings.qdrant_url,
@@ -39,6 +36,7 @@ class RAGPipeline:
             collection_name=settings.qdrant_collection,
             vector_size=self.embedder.dimension,
         )
+
         self.llm = OpenRouterLLM(
             api_key=settings.openrouter_api_key,
             model=settings.openrouter_model,
@@ -46,52 +44,100 @@ class RAGPipeline:
         )
 
     def ingest(self) -> int:
-        """Parse all PDFs in settings.pdf_dir, embed them, and load into Qdrant.
+        """Parse PDFs and index embeddings in small batches."""
 
-        Returns the number of chunks indexed.
-        """
-        try:
-            # Use ThreadPoolExecutor for timeout handling
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self._ingest_internal)
-                return future.result(timeout=300)  # 5 minute timeout
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError("Document ingestion timed out after 5 minutes")
-    
-    def _ingest_internal(self) -> int:
-        """Internal ingestion method without timeout wrapper."""
         chunks = load_pdfs(
             pdf_dir=self.settings.pdf_dir,
             chunk_size=self.settings.chunk_size,
             chunk_overlap=self.settings.chunk_overlap,
         )
-        print(f"[INFO] Total chunks to embed: {len(chunks)}")
 
-        texts = [c.text for c in chunks]
-        vectors = self.embedder.embed(texts)
+        total_chunks = len(chunks)
 
+        if total_chunks == 0:
+            print("[INFO] No PDF chunks found.")
+            return 0
+
+        print(f"[INFO] Total chunks to embed: {total_chunks}")
+
+        # Create/reset the Qdrant collection
         self.store.recreate_collection()
-        self.store.upsert_chunks(chunks, vectors)
 
-        print(f"[INFO] Indexed {len(chunks)} chunks into Qdrant collection '{self.settings.qdrant_collection}'")
-        return len(chunks)
+        # Small batches reduce RAM usage on Render
+        batch_size = 8
+        indexed = 0
+
+        for start in range(0, total_chunks, batch_size):
+            batch_chunks = chunks[start:start + batch_size]
+
+            texts = [chunk.text for chunk in batch_chunks]
+
+            end = min(start + batch_size, total_chunks)
+
+            print(
+                f"[INFO] Processing chunks "
+                f"{start + 1}-{end} of {total_chunks}"
+            )
+
+            # Generate embeddings only for this small batch
+            vectors = self.embedder.embed(
+                texts,
+                batch_size=batch_size,
+            )
+
+            # Upload this batch to Qdrant
+            self.store.upsert_chunks(
+                batch_chunks,
+                vectors,
+            )
+
+            indexed += len(batch_chunks)
+
+            # Release temporary objects
+            del texts
+            del vectors
+            del batch_chunks
+
+        # Release the full chunk list
+        del chunks
+
+        print(
+            f"[INFO] Indexed {indexed} chunks into "
+            f"Qdrant collection "
+            f"'{self.settings.qdrant_collection}'"
+        )
+
+        return indexed
 
     def query(self, question: str) -> RAGAnswer:
+        """Answer a question using the indexed PDF documents."""
+
         if not self.store.collection_exists():
             raise RuntimeError(
-                "Qdrant collection does not exist yet. Run ingestion first (python main.py ingest)."
+                "Qdrant collection does not exist yet. "
+                "Please process a PDF first."
             )
 
         query_vector = self.embedder.embed_one(question)
-        hits = self.store.search(query_vector, top_k=self.settings.top_k)
 
-        answer_text = self.llm.generate_answer(question, hits)
+        hits = self.store.search(
+            query_vector,
+            top_k=self.settings.top_k,
+        )
+
+        answer_text = self.llm.generate_answer(
+            question,
+            hits,
+        )
+
         found = NOT_FOUND_PHRASE not in answer_text
 
         citations = []
+
         if found:
             for hit in hits:
                 payload = hit.payload
+
                 citations.append(
                     Citation(
                         doc_name=payload["doc_name"],
@@ -101,4 +147,8 @@ class RAGPipeline:
                     )
                 )
 
-        return RAGAnswer(answer=answer_text, citations=citations, found=found)
+        return RAGAnswer(
+            answer=answer_text,
+            citations=citations,
+            found=found,
+        )

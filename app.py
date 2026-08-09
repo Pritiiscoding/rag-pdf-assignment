@@ -248,14 +248,12 @@ def query_documents():
 def get_status():
     """Get the current status of the RAG system."""
     try:
-        pipeline = get_pipeline()
-        collection_exists = pipeline.store.collection_exists()
         
         pdf_dir = Path(app.config['UPLOAD_FOLDER'])
         file_count = len(list(pdf_dir.glob('*.pdf'))) if pdf_dir.exists() else 0
         
         return jsonify({
-            'collection_exists': collection_exists,
+            'status': 'ok',
             'uploaded_files': file_count,
             'qdrant_url': settings.qdrant_url,
             'embedding_model': settings.embedding_model,
