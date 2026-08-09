@@ -8,23 +8,58 @@ from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from src.config import settings
-from src.rag_pipeline import RAGPipeline
+# Try to load config and RAG pipeline, but don't fail if dependencies are missing
+settings = None
+RAG_AVAILABLE = False
+RAGPipeline = None
+rag_pipeline = None
+pipeline_init_error = None
+
+# Simple configuration fallback
+class SimpleSettings:
+    pdf_dir = 'data/pdfs'
+    auto_cleanup_files = True
+    max_file_age_hours = 24
+    use_api_embeddings = True
+    qdrant_url = 'http://localhost:6333'
+    embedding_model = 'sentence-transformers/all-MiniLM-L6-v2'
+    openrouter_model = 'meta-llama/llama-3.1-8b-instruct:free'
+
+try:
+    from src.config import settings
+    print("[INFO] Configuration loaded successfully")
+except Exception as e:
+    print(f"[WARN] Could not load configuration: {e}")
+    settings = SimpleSettings()
+
+try:
+    from src.rag_pipeline import RAGPipeline
+    RAG_AVAILABLE = True
+    print("[INFO] RAG pipeline imports successful")
+except Exception as e:
+    RAG_AVAILABLE = False
+    print(f"[WARN] RAG pipeline not available: {e}")
+    print("[WARN] Basic file upload will work, but processing will fail")
 
 app = Flask(__name__)
 CORS(app)
 
 # Configure upload settings
-UPLOAD_FOLDER = settings.pdf_dir
 ALLOWED_EXTENSIONS = {'pdf'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+# Upload folder - will be set from config if available
+UPLOAD_FOLDER = 'data/pdfs'
+if settings:
+    UPLOAD_FOLDER = settings.pdf_dir
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize RAG pipeline
+# Initialize RAG pipeline (lazy initialization)
 rag_pipeline = None
+pipeline_init_error = None
 
 # Processing state
 processing_state = {
@@ -44,15 +79,30 @@ def allowed_file(filename):
 
 def get_pipeline():
     """Get or initialize RAG pipeline."""
-    global rag_pipeline
-    if rag_pipeline is None:
-        rag_pipeline = RAGPipeline(settings)
+    global rag_pipeline, pipeline_init_error
+    
+    if not RAG_AVAILABLE:
+        raise RuntimeError("RAG pipeline dependencies not available. Please check error logs and install required packages.")
+    
+    if rag_pipeline is None and pipeline_init_error is None:
+        try:
+            print("[PIPELINE] Initializing RAG pipeline...")
+            rag_pipeline = RAGPipeline(settings)
+            print("[PIPELINE] RAG pipeline initialized successfully")
+        except Exception as e:
+            pipeline_init_error = str(e)
+            print(f"[PIPELINE] Failed to initialize RAG pipeline: {e}")
+            raise RuntimeError(f"RAG pipeline initialization failed: {e}")
+    
+    if pipeline_init_error:
+        raise RuntimeError(f"RAG pipeline not available: {pipeline_init_error}")
+    
     return rag_pipeline
 
 
 def cleanup_old_files():
     """Remove files older than max_file_age_hours."""
-    if not settings.auto_cleanup_files:
+    if not settings or not settings.auto_cleanup_files:
         return
     
     try:
@@ -158,6 +208,9 @@ def delete_file(filename):
 @app.route('/api/ingest', methods=['POST'])
 def ingest_documents():
     """Ingest all PDF files into the RAG pipeline (asynchronous)."""
+    if not RAG_AVAILABLE:
+        return jsonify({'error': 'RAG pipeline not available. Please check dependencies and configuration.'}), 501
+    
     with processing_lock:
         if processing_state['status'] == 'processing':
             return jsonify({'error': 'Processing already in progress'}), 400
@@ -236,6 +289,9 @@ def get_ingest_status():
 @app.route('/api/query', methods=['POST'])
 def query_documents():
     """Query the RAG pipeline with a question."""
+    if not RAG_AVAILABLE:
+        return jsonify({'error': 'RAG pipeline not available. Please check dependencies and configuration.'}), 501
+    
     try:
         data = request.get_json()
         if not data or 'question' not in data:
@@ -271,17 +327,42 @@ def query_documents():
 def get_status():
     """Get the current status of the RAG system."""
     try:
-        
         pdf_dir = Path(app.config['UPLOAD_FOLDER'])
         file_count = len(list(pdf_dir.glob('*.pdf'))) if pdf_dir.exists() else 0
-        
-        return jsonify({
+
+        response = {
             'status': 'ok',
             'uploaded_files': file_count,
-            'qdrant_url': settings.qdrant_url,
-            'embedding_model': settings.embedding_model,
-            'llm_model': settings.openrouter_model
-        }), 200
+            'rag_available': RAG_AVAILABLE
+        }
+        
+        if settings:
+            response['qdrant_url'] = settings.qdrant_url
+            response['embedding_model'] = settings.embedding_model
+            response['llm_model'] = settings.openrouter_model
+            response['use_api_embeddings'] = settings.use_api_embeddings
+        else:
+            response['config_error'] = 'Configuration not available'
+        
+        # Try to get pipeline status if available
+        if not RAG_AVAILABLE:
+            response['pipeline_status'] = 'not_available'
+            response['message'] = 'RAG pipeline dependencies not installed. File upload works, but processing requires ML dependencies.'
+        elif pipeline_init_error:
+            response['pipeline_status'] = 'error'
+            response['pipeline_error'] = pipeline_init_error
+        elif rag_pipeline:
+            try:
+                collection_exists = rag_pipeline.store.collection_exists()
+                response['pipeline_status'] = 'ready'
+                response['collection_exists'] = collection_exists
+            except Exception as e:
+                response['pipeline_status'] = 'error'
+                response['pipeline_error'] = str(e)
+        else:
+            response['pipeline_status'] = 'not_initialized'
+        
+        return jsonify(response), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
